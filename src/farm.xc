@@ -3,11 +3,11 @@ typedef unsigned char uchar;
 #include <platform.h>
 #include <stdio.h>
 #include "pgmIO.h"
-#define IMHT 16
-#define IMWD 16
+#define IMHT 64
+#define IMWD 64
 
-char infname[] = "test7.pgm";     //put your input image path here, absolute path
-char outfname[] = "test21.pgm"; //put your output image path here, absolute path
+char infname[] = "test.pgm";     //put your input image path here, absolute path
+char outfname[] = "outputTest.pgm"; //put your output image path here, absolute path
 
 void printArray(uchar array[], int arraysize){
   printf("[");
@@ -77,6 +77,32 @@ void establishArrays(int numberOfCycles, chanend c_in, uchar above[], uchar calc
   //last time sets row below to 0s
   if (numberOfCycles != IMHT) {
       fillArray(c_in, below, IMWD);
+  }
+  else {
+      uchar below[IMWD] = {0};
+  }
+  return;
+}
+
+void establishArraysFromStore(int numberOfCycles, chanend c_in[], uchar above[], uchar calculate[], uchar below[]) {
+  //first time leaves row above to 0s
+  //and reads two lines not one
+  if (numberOfCycles-1 != 1) {
+      makeEqualArrays(above,calculate,IMWD);
+      makeEqualArrays(calculate,below,IMWD);
+  }
+  else {
+      c_in[(numberOfCycles-1)%4] <: 0;
+      c_in[(numberOfCycles-1)%4] <: (numberOfCycles-1);
+      fillArray(c_in[(numberOfCycles-1)%4], calculate, IMWD);
+  }
+
+  //last time sets row below to 0s
+  if (numberOfCycles-1 != IMHT) {
+
+      c_in[numberOfCycles%4] <: 0;
+      c_in[numberOfCycles%4] <: numberOfCycles;
+      fillArray(c_in[numberOfCycles%4], below, IMWD);
   }
   else {
       uchar below[IMWD] = {0};
@@ -181,7 +207,6 @@ void worker(chanend fromDist, streaming chanend toHarvest) {
       for (int i=0; i<width; i++){
           calculateCell(above,calculate,below,i,toHarvest);
       }
-
   }
 
   printf("Worker terminating\n");
@@ -203,12 +228,14 @@ void sendWork(chanend toWork, uchar above[], uchar calculate[], uchar below[], i
   return;
 }
 
-void distributor(chanend c_in, chanend toWork[], chanend toStore[])
+void distributor(chanend c_in, chanend toWork[], chanend toStore[], chanend toHarvester)
 {
   uchar above[IMWD] = {0};
   uchar below[IMWD];
   uchar calculate[IMWD];
-
+  int readFromPgm = 1;
+  //stores game state like paused and terminated
+  int isTerminated = 0;
   printf( "ProcessImage:Start, size = %dx%d\n", IMHT, IMWD );
   int lineNumber = 1;
   uchar singleWorkerStatus;
@@ -217,43 +244,62 @@ void distributor(chanend c_in, chanend toWork[], chanend toStore[])
   //THE CALCULATION ARRAY TO COMPUTE
   //single worker status code:
   //1 - Wants work
-  while(1){
-    printf("%d\n",lineNumber);
-    //ESTABLISH THE ARRAYS
-    establishArrays(lineNumber,c_in,above,calculate,below);
-    //printf("%d\n",lineNumber);
-    select {
-      case toWork[0] :> singleWorkerStatus:
-        printf("worker[%d]\n",0);
-        if (singleWorkerStatus == 1){
-            sendWork(toWork[0],above,calculate,below,lineNumber,IMWD);
-        }
-        break;
-      case toWork[1] :> singleWorkerStatus:
-      printf("worker[%d]\n",1);
-        if (singleWorkerStatus == 1){
-            sendWork(toWork[1],above,calculate,below,lineNumber,IMWD);
-        }
-        break;
-      case toWork[2] :> singleWorkerStatus:
-      printf("worker[%d]\n",2);
-        if (singleWorkerStatus == 1){
-            sendWork(toWork[2],above,calculate,below,lineNumber,IMWD);
-        }
-        break;
-      case toWork[3] :> singleWorkerStatus:
-      printf("worker[%d]\n",3);
-        if (singleWorkerStatus == 1){
-            sendWork(toWork[3],above,calculate,below,lineNumber,IMWD);
-        }
-        break;
+  for (int i = 0;i<3;i++){
+    while(1){
+      printf("%d\n",lineNumber);
+      //ESTABLISH THE ARRAYS
+      if (readFromPgm == 1) establishArrays(lineNumber,c_in,above,calculate,below);
+      else {
+          establishArraysFromStore(lineNumber+1,toStore,above,calculate,below);
+      }
+      //printArray(calculate,IMWD);
+      select {
+        case toWork[0] :> singleWorkerStatus:
+          //printf("worker[%d]\n",0);
+          if (singleWorkerStatus == 1){
+              sendWork(toWork[0],above,calculate,below,lineNumber,IMWD);
+          }
+          break;
+        case toWork[1] :> singleWorkerStatus:
+        //printf("worker[%d]\n",1);
+          if (singleWorkerStatus == 1){
+              sendWork(toWork[1],above,calculate,below,lineNumber,IMWD);
+          }
+          break;
+        case toWork[2] :> singleWorkerStatus:
+        //printf("worker[%d]\n",2);
+          if (singleWorkerStatus == 1){
+              sendWork(toWork[2],above,calculate,below,lineNumber,IMWD);
+          }
+          break;
+        case toWork[3] :> singleWorkerStatus:
+        //printf("worker[%d]\n",3);
+          if (singleWorkerStatus == 1){
+              sendWork(toWork[3],above,calculate,below,lineNumber,IMWD);
+          }
+          break;
 
+      }
+
+      if (lineNumber == IMHT) {
+          readFromPgm = 0;
+          lineNumber = 1;
+
+          //sync with harvester
+          printf("syncing...\n");
+          toHarvester <: 0;
+          toHarvester <: isTerminated;
+          printf("%d\n",isTerminated);
+          printf("done\n");
+          break;
+      }
+      lineNumber++;
     }
-
-    if (lineNumber == IMHT) break;
-    lineNumber++;
+    //CHANGE THIS TO BE DONE BY BUTTON PRESS
+    if (i == 1) isTerminated = 1;
   }
-
+  //terminate
+  printf("termin from dist\n");
   for (int i=0; i<4; i++){
       toWork[i] :> singleWorkerStatus;
       toWork[i] <: 0;
@@ -272,11 +318,11 @@ void sendRowToStore(int rowCalculated, streaming chanend workToHarvester[], chan
   }
 }
 
-void harvester(streaming chanend workToHarvester[], chanend harvesterToStore[], chanend toOut){
+void harvester(streaming chanend workToHarvester[], chanend harvesterToStore[], chanend toOut, chanend toDistrib){
   int rowCalculated;
+  int distribInstruction = 0;
   int rowsRead = 0;
   while (1) {
-
     select {
       case workToHarvester[0] :> rowCalculated:
         sendRowToStore(rowCalculated,workToHarvester,harvesterToStore,0);
@@ -296,24 +342,46 @@ void harvester(streaming chanend workToHarvester[], chanend harvesterToStore[], 
     //this needs to be changed to be done at the distrib's instruction
     //by adding a read from distrib at the start (like in worker)
     if (rowsRead == IMWD) {
-        uchar cell;
-        for (int i=1;i<=IMHT;i++){
-            harvesterToStore[i%4] <: 1;
-            harvesterToStore[i%4] <: i;
-            for (int j=0;j<IMWD;j++){
-              harvesterToStore[i%4] :> cell;
-              toOut <: cell;
-
+        //this channel read syncs distributor and harvester at the end of a board read
+        //0 means continue
+        //1 means terminate and print
+        toDistrib :> distribInstruction;
+        if (distribInstruction == 0) {
+            rowsRead = 0;
+            for (int i=0;i<4;i++){
+                harvesterToStore[i] <: 4;
             }
+            //signal sync complete
+            toDistrib :> distribInstruction;
+            //distrib can signal termination here
+        }
+        if (distribInstruction == 1){
+          printf("printing harvest...\n");
+          uchar cell;
+          for (int i=1;i<=IMHT;i++){
+              harvesterToStore[i%4] <: 1;
+              harvesterToStore[i%4] <: i;
+              for (int j=0;j<IMWD;j++){
+                harvesterToStore[i%4] :> cell;
+                toOut <: cell;
 
+              }
+
+          }
+          for (int i=0;i<4;i++){
+              harvesterToStore[i] <: 0;
+          }
+          break;
         }
-        for (int i=0;i<4;i++){
-            harvesterToStore[i] <: 0;
-        }
-        break;
     }
   }
+  printf("terminating harvester\n");
   return;
+}
+
+int hashFunction(int rowNumber){
+  while (rowNumber%4 != 0) rowNumber++;
+  return (rowNumber/4)-1;
 }
 
 //from distib needs to be added so we can easily cycle into another round
@@ -324,33 +392,66 @@ void store(chanend fromHarvester,chanend fromDistributor) {
   int distribInstruction;
   int rowNumber;
   int storeLocation = 0;
+  uchar found = 0;
   while(1){
-      //so harvester instructions only proc if a message is sent from harvester
+      //so instructions only activate if a message is sent from relevant control
       harvestInstruction = -1;
+      distribInstruction = -1;
       select {
         case fromHarvester :> harvestInstruction:
           break;
         case fromDistributor :> distribInstruction:
           break;
       }
+      //instruction from distributor
+      //0 means work request
+      if (distribInstruction == 0) {
+          fromDistributor :> rowNumber;
+          found = 0;
+          for (int i=0; i<IMHT/4; i++){
+              if (store[i][0] == rowNumber){
+                  for (int j=1;j<=IMWD;j++){
+                      fromDistributor <: store[i][j];
+                  }
+                  found = 1;
+                  break;
+              }
+          }
+          if (!found) {
+              printf("STORE ERROR FINDING ARRAY %d DIST\n",rowNumber);
+              for (int i=0; i<IMHT/4; i++){
+                  printf("%d,%d\n",i,store[i][0]);
+              }
+          }
+          else found = 0;
+      }
       //instruction from harvester
       //0 means terminate
       //1 means harvester wants info to print out
-      //2 means harvester will send info into the store
-      if (harvestInstruction == 2){
-        fromHarvester :> rowNumber;
-        store[storeLocation][0] = (uchar) rowNumber;
-        //just dont even ask why this cant be it's own variable
-        for(int i=1;i<=IMWD;i++){
+      //2 means harvester will send info into the store no care needed in placing
+      //3 means print stored arrays
+      //4 means reset store location
+      else if (harvestInstruction == 4) {
+          storeLocation = 0;
+      }
+      else if (harvestInstruction == 3) {
+          for (int i=0; i<IMHT/4; i++){
+              printf("%d,%d\n",i,store[i][0]);
+          }
+      }
+      else if (harvestInstruction == 2){
+          fromHarvester :> rowNumber;
+          storeLocation = hashFunction(rowNumber);
+          store[storeLocation][0] = (uchar) rowNumber;
+          for(int i=1;i<=IMWD;i++){
+              fromHarvester :> store[storeLocation][i];
+          }
 
-            fromHarvester :> store[storeLocation][i];
-        }
-        storeLocation++;
       }
       else if (harvestInstruction == 1) {
           //harvester tells the worker which row it wants
           fromHarvester :> rowNumber;
-          uchar found = 0;
+          found = 0;
           for (int i=0; i<IMHT/4; i++){
               if (store[i][0] == rowNumber){
                   for (int j=1;j<=IMWD;j++){
@@ -361,7 +462,7 @@ void store(chanend fromHarvester,chanend fromDistributor) {
               }
           }
           if (!found) {
-              printf("WORKER ERROR FINDING ARRAY\n");
+              printf("STORE ERROR FINDING ARRAY HARV\n");
               for (int i=0; i<IMHT/4; i++){
                   printf("%d,%d\n",i,store[i][0]);
               }
@@ -369,8 +470,6 @@ void store(chanend fromHarvester,chanend fromDistributor) {
           else found = 0;
       }
       else if (harvestInstruction == 0) break;
-      //
-
 
   }
   printf("terminating store\n");
@@ -412,15 +511,15 @@ int main()
   chan c_inIO; //extend your channel definitions here
   chan distToWork[4];
   streaming chan workToHarvester[4];
-  chan harvesterToOut;
+  chan harvesterToOut, distribToHarvest;
   chan harvesterToStore[4];
   chan distribToStore[4];
   par //extend/change this par statement
   {
     on stdcore[1]: DataInStream( infname, c_inIO );
-    on stdcore[0]: distributor( c_inIO, distToWork,distribToStore);
+    on stdcore[0]: distributor( c_inIO, distToWork,distribToStore,distribToHarvest);
     on stdcore[2]: DataOutStream( outfname, harvesterToOut );
-    on stdcore[3]: harvester(workToHarvester,harvesterToStore,harvesterToOut);
+    on stdcore[3]: harvester(workToHarvester,harvesterToStore,harvesterToOut,distribToHarvest);
     on stdcore[0]: worker(distToWork[0],workToHarvester[0]);
     on stdcore[1]: worker(distToWork[1],workToHarvester[1]);
     on stdcore[2]: worker(distToWork[2],workToHarvester[2]);
@@ -433,5 +532,4 @@ int main()
   //printf( "Main:Done...\n" );
   return 0;
 }
-
 

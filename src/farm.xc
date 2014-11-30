@@ -4,8 +4,8 @@ typedef unsigned char uchar;
 #include <stdio.h>
 #include <timer.h>
 #include "pgmIO.h"
-#define IMHT 64
-#define IMWD 64
+#define IMHT 16
+#define IMWD 16
 out port cled0 = PORT_CLOCKLED_0;
 out port cled1 = PORT_CLOCKLED_1;
 out port cled2 = PORT_CLOCKLED_2;
@@ -15,7 +15,7 @@ out port cledR = PORT_CLOCKLED_SELR;
 in port  buttons = PORT_BUTTON;
 
 char infname[] = "test.pgm";     //put your input image path here, absolute path
-char outfname[] = "outputTest.pgm"; //put your output image path here, absolute path
+char outfname[] = "testout.pgm"; //put your output image path here, absolute path
 
 void printArray(uchar array[], int arraysize){
   printf("[");
@@ -37,7 +37,6 @@ void buttonListener(in port b, chanend toDataIn, chanend toDist){
       while (1) {
         select {
           case b when pinsneq(15) :> r:// check if some buttons are pressed
-            printf("button pressed\n");
             //Triggers the start of image processing
             //can only be pressed when game is not started
             if(r == 14 && !start){
@@ -45,21 +44,25 @@ void buttonListener(in port b, chanend toDataIn, chanend toDist){
                 toDataIn <: start;
             }
             //Triggers the game to be paused
-            else if(r == 13){
-                gameState = 2;
-                printf("button terminating\n");
-                return;
-
+            else if(r == 13 && start){
+                if (gameState == 2) {
+                    printf("unpaused state\n");
+                    gameState = 0;
+                }
+                else {
+                    printf("paused state\n");
+                    gameState = 2;
+                }
             }
             //Triggers the export of the current game as a PNG file
-            else if(r == 11){
+            else if(r == 11 && start){
+                printf("print state\n");
                 gameState = 3;
-                printf("button terminating\n");
-                return;
             }
             //Triggers the program to terminate gracefully
-            else if(r == 7){
+            else if(r == 7 && start){
                 gameState = 1;
+                printf("terminate state\n");
             }
             break;
           case toDist :> distMessage:
@@ -68,6 +71,39 @@ void buttonListener(in port b, chanend toDataIn, chanend toDist){
                 return;
             }
             toDist <: gameState;
+            //so we dont print every time
+            if (gameState == 3) {
+                gameState = 0;
+            }
+            //deal with pause shenanigans
+            if (gameState == 2) {
+                while (1){
+                    b when pinsneq(15) :> r;
+                    delay_milliseconds(250);
+                    //unpause
+                    if (r == 13) {
+                        gameState = 0;
+                        toDist <: gameState;
+                        break;
+                    }
+                    //restart
+                    else if (r == 14) {
+                        //do stuff
+                        break;
+                    }
+                    //printout
+                    else if (r == 11){
+                        gameState = 3;
+                        toDist <: gameState;
+                    }
+                    //terminate
+                    else if (r == 7){
+                        gameState = 1;
+                        toDist <: gameState;
+                        break;
+                    }
+                }
+            }
             break;
         }
         delay_milliseconds(250);
@@ -360,25 +396,38 @@ void distributor(chanend c_in, chanend toWork[], chanend toStore[], chanend toHa
           fromButton <: 0;
           fromButton :> isTerminated;
           toHarvester <: isTerminated;
+
+          if (isTerminated == 2){
+              while(1){
+                  fromButton :> isTerminated;
+                  toHarvester <: isTerminated;
+                  if (isTerminated == 0 || isTerminated == 1) break;
+                  else if (isTerminated == 3) {
+                      toHarvester <: 0;
+                  }
+              }
+          }
+          //delay so data out can work
+          if (isTerminated == 3){
+              toHarvester <: 0;
+          }
           if (isTerminated == 1){
               //tell button listener to end
               fromButton <: 1;
           }
+
           printf("done\n");
           break;
       }
       lineNumber++;
     }
-    /*if(i == 1){
-        isTerminated = 1;
-    }*/
     printf("Current Round = %d\n", rounds);
     if (isTerminated == 1) break;
     rounds++;
   }
   //terminate
   printf("Distributer terminating\n");
-  for (int i=0; i<4; i++){
+  for (int i=0; i<3; i++){
       toWork[i] :> singleWorkerStatus;
       toWork[i] <: 0;
   }
@@ -396,7 +445,11 @@ void sendRowToStore(int rowCalculated, streaming chanend workToHarvester[], chan
   }
 }
 
-void harvester(streaming chanend workToHarvester[], chanend harvesterToStore[], chanend toOut, chanend toDistrib){
+void harvester(streaming chanend workToHarvester[],
+               chanend harvesterToStore[],
+               chanend toOut,
+               chanend toDistrib,
+               chanend toDataOut){
   int rowCalculated;
   int distribInstruction = 0;
   int rowsRead = 0;
@@ -416,13 +469,12 @@ void harvester(streaming chanend workToHarvester[], chanend harvesterToStore[], 
         break;
     }
     rowsRead++;
-    //atm this just prints and terminates after one cycle
-    //this needs to be changed to be done at the distrib's instruction
-    //by adding a read from distrib at the start (like in worker)
+    //sync zone
     if (rowsRead == IMWD) {
         //this channel read syncs distributor and harvester at the end of a board read
         //0 means continue
-        //1 means terminate and print
+        //1 means terminate
+        //3 means print
         toDistrib :> distribInstruction;
         if (distribInstruction == 0) {
             rowsRead = 0;
@@ -433,19 +485,50 @@ void harvester(streaming chanend workToHarvester[], chanend harvesterToStore[], 
             toDistrib :> distribInstruction;
             //distrib can signal termination here
         }
+        if (distribInstruction == 3){
+            //print
+            uchar cell;
+            toDataOut <: 0;
+            for (int i=1;i<=IMHT;i++){
+                harvesterToStore[i%4] <: 1;
+                harvesterToStore[i%4] <: i;
+                for (int j=0;j<IMWD;j++){
+                  harvesterToStore[i%4] :> cell;
+                  toOut <: cell;
+
+                }
+
+            }
+            toDataOut <: 0;
+            toDistrib :> distribInstruction;
+            //print
+        }
+        if (distribInstruction == 2){
+            while(1){
+                toDistrib :> distribInstruction;
+                if (distribInstruction == 0 || distribInstruction == 1) break;
+                else if (distribInstruction == 3){
+                    //print
+                    uchar cell;
+                    toDataOut <: 0;
+                    for (int i=1;i<=IMHT;i++){
+                        harvesterToStore[i%4] <: 1;
+                        harvesterToStore[i%4] <: i;
+                        for (int j=0;j<IMWD;j++){
+                          harvesterToStore[i%4] :> cell;
+                          toOut <: cell;
+
+                        }
+
+                    }
+                    toDataOut <: 0;
+                    toDistrib :> distribInstruction;
+                    //print
+                }
+            }
+        }
         if (distribInstruction == 1){
-          printf("printing harvest...\n");
-          uchar cell;
-          for (int i=1;i<=IMHT;i++){
-              harvesterToStore[i%4] <: 1;
-              harvesterToStore[i%4] <: i;
-              for (int j=0;j<IMWD;j++){
-                harvesterToStore[i%4] :> cell;
-                toOut <: cell;
-
-              }
-
-          }
+            toDataOut <: 2;
           for (int i=0;i<4;i++){
               harvesterToStore[i] <: 0;
           }
@@ -530,29 +613,42 @@ void store(chanend fromHarvester,chanend fromDistributor) {
 // Write pixel stream from channel c_in to pgm image file
 //
 /////////////////////////////////////////////////////////////////////////////////////////
-void DataOutStream(char outfname[], chanend c_in)
+void DataOutStream(char outfname[], chanend c_in, chanend fromHarvester)
 {
   int res;
+  //0 means continue after print
+  //1 means exit after print
+  //2 means exit
+  int harvestInstruction = 0;
   uchar line[ IMWD ];
-  //printf( "DataOutStream:Start...\n" );
-  res = _openoutpgm( outfname, IMWD, IMHT );
-  if( res )
-  {
-    printf( "DataOutStream:Error opening %s\n.", outfname );
-    return;
-  }
-  for( int y = 0; y < IMHT; y++ )
-  {
-    for( int x = 0; x < IMWD; x++ )
-    {
-      c_in :> line[ x ];
-      //printf( "-%4.1d ", line[ x ] );
+  while (harvestInstruction == 0){
+    fromHarvester :> harvestInstruction;
+    if (harvestInstruction == 2){
+        break;
     }
-    //printf("\n");
-    _writeoutline( line, IMWD );
+    printf( "DataOutStream:Start...\n" );
+    res = _openoutpgm( outfname, IMWD, IMHT );
+    if( res )
+    {
+      printf( "DataOutStream:Error opening %s\n.", outfname );
+      return;
+    }
+    for( int y = 0; y < IMHT; y++ )
+    {
+      for( int x = 0; x < IMWD; x++ )
+      {
+        c_in :> line[ x ];
+        //printf( "-%4.1d ", line[ x ] );
+      }
+      //printf("\n");
+      _writeoutline( line, IMWD );
+    }
+    printf( "DataOutStream:Printed...\n" );
+    _closeoutpgm();
+    fromHarvester :> harvestInstruction;
   }
-  _closeoutpgm();
-  printf( "DataOutStream:Done...\n" );
+
+  printf( "DataOutStream:Terminating...\n" );
   return;
 }
 
@@ -567,17 +663,18 @@ int main()
   chan distribToStore[4];
   chan buttonToDataIn;
   chan buttonToDist;
+  chan harvestToDataOut;
   par //extend/change this par statement
   {
     on stdcore[1]: DataInStream( infname, c_inIO, buttonToDataIn );
     on stdcore[0]: buttonListener(buttons, buttonToDataIn, buttonToDist);
     on stdcore[0]: distributor( c_inIO, distToWork,distribToStore,distribToHarvest, buttonToDist);
-    on stdcore[2]: DataOutStream( outfname, harvesterToOut );
-    on stdcore[3]: harvester(workToHarvester,harvesterToStore,harvesterToOut,distribToHarvest);
+    on stdcore[2]: DataOutStream( outfname, harvesterToOut,harvestToDataOut );
+    on stdcore[3]: harvester(workToHarvester,harvesterToStore,harvesterToOut,distribToHarvest,harvestToDataOut);
     on stdcore[0]: worker(distToWork[0],workToHarvester[0]);
-    on stdcore[1]: worker(distToWork[1],workToHarvester[1]);
-    on stdcore[2]: worker(distToWork[2],workToHarvester[2]);
-    on stdcore[3]: worker(distToWork[3],workToHarvester[3]);
+    //on stdcore[1]: worker(distToWork[1],workToHarvester[1]);
+    on stdcore[2]: worker(distToWork[1],workToHarvester[1]);
+    on stdcore[3]: worker(distToWork[2],workToHarvester[2]);
     on stdcore[0]: store(harvesterToStore[0],distribToStore[0]);
     on stdcore[1]: store(harvesterToStore[1],distribToStore[1]);
     on stdcore[2]: store(harvesterToStore[2],distribToStore[2]);

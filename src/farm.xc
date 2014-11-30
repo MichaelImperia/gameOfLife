@@ -2,9 +2,17 @@ typedef unsigned char uchar;
 
 #include <platform.h>
 #include <stdio.h>
+#include <timer.h>
 #include "pgmIO.h"
 #define IMHT 64
 #define IMWD 64
+out port cled0 = PORT_CLOCKLED_0;
+out port cled1 = PORT_CLOCKLED_1;
+out port cled2 = PORT_CLOCKLED_2;
+out port cled3 = PORT_CLOCKLED_3;
+out port cledG = PORT_CLOCKLED_SELG;
+out port cledR = PORT_CLOCKLED_SELR;
+in port  buttons = PORT_BUTTON;
 
 char infname[] = "test.pgm";     //put your input image path here, absolute path
 char outfname[] = "outputTest.pgm"; //put your output image path here, absolute path
@@ -17,15 +25,48 @@ void printArray(uchar array[], int arraysize){
   printf("]\n");
 }
 
+void buttonListener(in port b, chanend toDataIn, chanend toDist){
+    int paused = 0;
+    int start = 0;
+    int terminate = 0;
+    int r;
+      while (1) {
+        b when pinsneq(15) :> r;// check if some buttons are pressed
+        //Triggers the start of image processing
+        if(r == 14){
+            start = 1;
+            toDataIn <: start;
+        }
+        //Triggers the game to be paused
+        else if(r == 13){
+            paused = 1;
+
+        }
+        //Triggers the export of the current game as a PNG file
+        else if(r == 11){
+
+        }
+        //Triggers the program to terminate gracefully
+        else if(r == 7){
+            terminate = 1;
+            toDist <: terminate;
+        }
+    }
+}
+
 /////////////////////////////////////////////////////////////////////////////////////////
 //
 // Read Image from pgm file with path and name infname[] to channel c_out
 //
 /////////////////////////////////////////////////////////////////////////////////////////
-void DataInStream(char infname[], chanend c_out)
+void DataInStream(char infname[], chanend c_out, chanend fromButton)
 {
   int res;
+  int instruction = 0;
   uchar line[ IMWD ];
+
+  fromButton :> instruction;
+
   printf( "DataInStream:Start...\n" );
   res = _openinpgm( infname, IMWD, IMHT );
   if( res )
@@ -228,7 +269,7 @@ void sendWork(chanend toWork, uchar above[], uchar calculate[], uchar below[], i
   return;
 }
 
-void distributor(chanend c_in, chanend toWork[], chanend toStore[], chanend toHarvester)
+void distributor(chanend c_in, chanend toWork[], chanend toStore[], chanend toHarvester, chanend fromButton)
 {
   uchar above[IMWD] = {0};
   uchar below[IMWD];
@@ -236,7 +277,6 @@ void distributor(chanend c_in, chanend toWork[], chanend toStore[], chanend toHa
   int readFromPgm = 1;
   //stores game state like paused and terminated
   int isTerminated = 0;
-  printf( "ProcessImage:Start, size = %dx%d\n", IMHT, IMWD );
   int lineNumber = 1;
   uchar singleWorkerStatus;
 
@@ -244,6 +284,10 @@ void distributor(chanend c_in, chanend toWork[], chanend toStore[], chanend toHa
   //THE CALCULATION ARRAY TO COMPUTE
   //single worker status code:
   //1 - Wants work
+
+  printf( "Image size = %dx%d\n", IMHT, IMWD );
+  printf( "Press A to begin processing the image\n");
+
   for (int i = 0;i<3;i++){
     while(1){
       printf("%d\n",lineNumber);
@@ -284,7 +328,6 @@ void distributor(chanend c_in, chanend toWork[], chanend toStore[], chanend toHa
       if (lineNumber == IMHT) {
           readFromPgm = 0;
           lineNumber = 1;
-
           //sync with harvester
           printf("syncing...\n");
           toHarvester <: 0;
@@ -295,11 +338,13 @@ void distributor(chanend c_in, chanend toWork[], chanend toStore[], chanend toHa
       }
       lineNumber++;
     }
-    //CHANGE THIS TO BE DONE BY BUTTON PRESS
-    if (i == 1) isTerminated = 1;
+    if(i == 1){
+        isTerminated = 1;
+    }
+    printf("Current Round = %d\n", i+1);
   }
   //terminate
-  printf("termin from dist\n");
+  printf("Distributer terminating\n");
   for (int i=0; i<4; i++){
       toWork[i] :> singleWorkerStatus;
       toWork[i] <: 0;
@@ -483,7 +528,7 @@ void DataOutStream(char outfname[], chanend c_in)
 {
   int res;
   uchar line[ IMWD ];
-  printf( "DataOutStream:Start...\n" );
+  //printf( "DataOutStream:Start...\n" );
   res = _openoutpgm( outfname, IMWD, IMHT );
   if( res )
   {
@@ -514,10 +559,13 @@ int main()
   chan harvesterToOut, distribToHarvest;
   chan harvesterToStore[4];
   chan distribToStore[4];
+  chan buttonToDataIn;
+  chan buttonToDist;
   par //extend/change this par statement
   {
-    on stdcore[1]: DataInStream( infname, c_inIO );
-    on stdcore[0]: distributor( c_inIO, distToWork,distribToStore,distribToHarvest);
+    on stdcore[1]: DataInStream( infname, c_inIO, buttonToDataIn );
+    on stdcore[0]: buttonListener(buttons, buttonToDataIn, buttonToDist);
+    on stdcore[0]: distributor( c_inIO, distToWork,distribToStore,distribToHarvest, buttonToDist);
     on stdcore[2]: DataOutStream( outfname, harvesterToOut );
     on stdcore[3]: harvester(workToHarvester,harvesterToStore,harvesterToOut,distribToHarvest);
     on stdcore[0]: worker(distToWork[0],workToHarvester[0]);

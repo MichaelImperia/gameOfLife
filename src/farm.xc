@@ -25,6 +25,89 @@ void printArray(uchar array[], int arraysize){
   printf("]\n");
 }
 
+int showLED(out port p, chanend fromVisualiser) {
+    unsigned int lightUpPattern;
+    while (1) {
+        fromVisualiser :> lightUpPattern; //read LED pattern from visualiser process
+        p <: lightUpPattern;              //send pattern to LEDs
+    }
+    return 0;
+}
+
+void decimalToBinary(int output[], int decimal){
+    int a = decimal;
+    int i=0;
+    int binaryNum[12] = {0};
+    int segmentTotal = 0, currentIndex = 0;
+
+    //build the binary number in reverse in binaryNum[]
+    while(a != 0){
+        binaryNum[i] = a%2;
+
+        a = a/2;
+
+        i++;
+    }
+
+    //build the binary number so the LED's are able to correctly choose which LED to light.
+    for(i=0; i<4; i++){
+        if (binaryNum[currentIndex] == 1) segmentTotal += 4;
+        if (binaryNum[currentIndex+1] == 1) segmentTotal += 2;
+        if (binaryNum[currentIndex+2] == 1) segmentTotal += 1;
+        output[i] = segmentTotal<<4;
+        segmentTotal = 0;
+        currentIndex += 3;
+    }
+    return;
+}
+
+void visualiser(chanend fromDist,
+                chanend toQuadrant0,
+                chanend toQuadrant1,
+                chanend toQuadrant2,
+                chanend toQuadrant3,
+                chanend fromWorker[])
+{
+    int isPaused = 0;
+    int currentRound = 0;
+    int totalCells = 0;
+    int liveCellsOnRow = 0;
+    cledR <: 1;
+    while(1){
+        int array[4] = {0};
+        select{
+            //dist sends a 1 to indicate game is paused
+            //dist then send currentRound for display by the LEDs
+            case fromDist :> isPaused:
+                fromDist :> currentRound;
+                decimalToBinary(array, currentRound);
+                break;
+            case fromWorker[0] :> liveCellsOnRow:
+                totalCells += liveCellsOnRow;
+                break;
+            case fromWorker[1] :> liveCellsOnRow:
+                totalCells += liveCellsOnRow;
+                break;
+            case fromWorker[2] :> liveCellsOnRow:
+                totalCells += liveCellsOnRow;
+                break;
+            case fromWorker[3] :> liveCellsOnRow:
+                totalCells += liveCellsOnRow;
+                break;
+        }
+
+        //If not paused, prepare array for dispplay with number of cells alive
+        if(!isPaused){
+            decimalToBinary(array, totalCells);
+        }
+        //Display current information on LEDs (Number of cells alive or current round)
+        toQuadrant0 <: array[3];
+        toQuadrant1 <: array[2];
+        toQuadrant2 <: array[1];
+        toQuadrant3 <: array[0];
+    }
+}
+
 void buttonListener(in port b, chanend toDataIn, chanend toDist){
     int distMessage;
     int start = 0;
@@ -567,6 +650,9 @@ int main()
   chan distribToStore[4];
   chan buttonToDataIn;
   chan buttonToDist;
+  chan workerToVisualiser[4];
+  chan distToVisualiser;
+  chan quadrant0,quadrant1,quadrant2,quadrant3;
   par //extend/change this par statement
   {
     on stdcore[1]: DataInStream( infname, c_inIO, buttonToDataIn );
@@ -574,14 +660,17 @@ int main()
     on stdcore[0]: distributor( c_inIO, distToWork,distribToStore,distribToHarvest, buttonToDist);
     on stdcore[2]: DataOutStream( outfname, harvesterToOut );
     on stdcore[3]: harvester(workToHarvester,harvesterToStore,harvesterToOut,distribToHarvest);
-    on stdcore[0]: worker(distToWork[0],workToHarvester[0]);
-    on stdcore[1]: worker(distToWork[1],workToHarvester[1]);
-    on stdcore[2]: worker(distToWork[2],workToHarvester[2]);
-    on stdcore[3]: worker(distToWork[3],workToHarvester[3]);
-    on stdcore[0]: store(harvesterToStore[0],distribToStore[0]);
-    on stdcore[1]: store(harvesterToStore[1],distribToStore[1]);
-    on stdcore[2]: store(harvesterToStore[2],distribToStore[2]);
-    on stdcore[3]: store(harvesterToStore[3],distribToStore[3]);
+    par(int i = 0; i < 4; i++){
+        on stdcore[i]: worker(distToWork[i],workToHarvester[i]); //To use visualiser, change = worker(distToWork[i],workToHarvester[i],workerToVisualiser[i]);
+    }
+    par(int i = 0; i < 4; i++){
+        on stdcore[i]: store(harvesterToStore[i],distribToStore[i]);
+    }
+    /*on stdcore[0]: visualiser(distToVisualiser,quadrant0,quadrant1,quadrant2,quadrant3,workerToVisualiser[0],workerToVisualiser[1],workerToVisualiser[2],workerToVisualiser[3]);
+    on stdcore[0]: showLED(cled0,quadrant0);
+    on stdcore[1]: showLED(cled1,quadrant1);
+    on stdcore[2]: showLED(cled2,quadrant2);
+    on stdcore[3]: showLED(cled3,quadrant3);*/  //Uncomment to start using the visualiser
   }
   //printf( "Main:Done...\n" );
   return 0;

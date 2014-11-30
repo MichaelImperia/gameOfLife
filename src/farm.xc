@@ -4,8 +4,8 @@ typedef unsigned char uchar;
 #include <stdio.h>
 #include <timer.h>
 #include "pgmIO.h"
-#define IMHT 16
-#define IMWD 16
+#define IMHT 64
+#define IMWD 64
 out port cled0 = PORT_CLOCKLED_0;
 out port cled1 = PORT_CLOCKLED_1;
 out port cled2 = PORT_CLOCKLED_2;
@@ -26,34 +26,49 @@ void printArray(uchar array[], int arraysize){
 }
 
 void buttonListener(in port b, chanend toDataIn, chanend toDist){
-    int paused = 0;
+    int distMessage;
     int start = 0;
-    int terminate = 0;
+    //0 means continue
+    //1 means terminate
+    //2 means pause
+    //3 means print
+    int gameState = 0;
     int r;
       while (1) {
-        b when pinsneq(15) :> r;// check if some buttons are pressed
-        printf("button pressed\n");
-        //Triggers the start of image processing
-        if(r == 14){
-            start = 1;
-            toDataIn <: start;
-        }
-        //Triggers the game to be paused
-        else if(r == 13){
-            paused = 1;
-            printf("button terminating\n");
-            return;
+        select {
+          case b when pinsneq(15) :> r:// check if some buttons are pressed
+            printf("button pressed\n");
+            //Triggers the start of image processing
+            //can only be pressed when game is not started
+            if(r == 14 && !start){
+                start = 1;
+                toDataIn <: start;
+            }
+            //Triggers the game to be paused
+            else if(r == 13){
+                gameState = 2;
+                printf("button terminating\n");
+                return;
 
-        }
-        //Triggers the export of the current game as a PNG file
-        else if(r == 11){
-            printf("button terminating\n");
-            return;
-        }
-        //Triggers the program to terminate gracefully
-        else if(r == 7){
-            terminate = 1;
-            toDist <: terminate;
+            }
+            //Triggers the export of the current game as a PNG file
+            else if(r == 11){
+                gameState = 3;
+                printf("button terminating\n");
+                return;
+            }
+            //Triggers the program to terminate gracefully
+            else if(r == 7){
+                gameState = 1;
+            }
+            break;
+          case toDist :> distMessage:
+            if (distMessage == 1){
+                printf("button terminating\n");
+                return;
+            }
+            toDist <: gameState;
+            break;
         }
         delay_milliseconds(250);
     }
@@ -138,6 +153,9 @@ void establishArraysFromStore(int numberOfCycles, chanend c_in[], uchar above[],
       makeEqualArrays(calculate,below,IMWD);
   }
   else {
+      for (int i=0;i<IMWD;i++){
+          above[i] = 0;
+      }
       c_in[(numberOfCycles-1)%4] <: 0;
       c_in[(numberOfCycles-1)%4] <: (numberOfCycles-1);
       fillArray(c_in[(numberOfCycles-1)%4], calculate, IMWD);
@@ -280,6 +298,7 @@ void distributor(chanend c_in, chanend toWork[], chanend toStore[], chanend toHa
   uchar below[IMWD];
   uchar calculate[IMWD];
   int readFromPgm = 1;
+  int rounds = 0;
   //stores game state like paused and terminated
   int isTerminated = 0;
   int lineNumber = 1;
@@ -293,7 +312,7 @@ void distributor(chanend c_in, chanend toWork[], chanend toStore[], chanend toHa
   printf( "Image size = %dx%d\n", IMHT, IMWD );
   printf( "Press A to begin processing the image\n");
 
-  for (int i = 0;i<3;i++){
+  while(1){
     while(1){
       printf("%d\n",lineNumber);
       //ESTABLISH THE ARRAYS
@@ -301,7 +320,7 @@ void distributor(chanend c_in, chanend toWork[], chanend toStore[], chanend toHa
       else {
           establishArraysFromStore(lineNumber+1,toStore,above,calculate,below);
       }
-      //printArray(calculate,IMWD);
+      //work zone
       select {
         case toWork[0] :> singleWorkerStatus:
           //printf("worker[%d]\n",0);
@@ -330,22 +349,32 @@ void distributor(chanend c_in, chanend toWork[], chanend toStore[], chanend toHa
 
       }
 
+      //sync zone
       if (lineNumber == IMHT) {
           readFromPgm = 0;
           lineNumber = 1;
           //sync with harvester
           printf("syncing...\n");
           toHarvester <: 0;
+          //check if user wants to terminate, print, pause or continue
+          fromButton <: 0;
+          fromButton :> isTerminated;
           toHarvester <: isTerminated;
+          if (isTerminated == 1){
+              //tell button listener to end
+              fromButton <: 1;
+          }
           printf("done\n");
           break;
       }
       lineNumber++;
     }
-    if(i == 1){
+    /*if(i == 1){
         isTerminated = 1;
-    }
-    printf("Current Round = %d\n", i+1);
+    }*/
+    printf("Current Round = %d\n", rounds);
+    if (isTerminated == 1) break;
+    rounds++;
   }
   //terminate
   printf("Distributer terminating\n");

@@ -441,7 +441,6 @@ void store(chanend fromHarvester,chanend fromDistributor) {
   int distribInstruction;
   int rowNumber;
   int storeLocation = 0;
-  uchar found = 0;
   while(1){
       //so instructions only activate if a message is sent from relevant control
       harvestInstruction = -1;
@@ -457,7 +456,6 @@ void store(chanend fromHarvester,chanend fromDistributor) {
       if (distribInstruction == 0) {
           fromDistributor :> rowNumber;
           storeLocation = hashFunction(rowNumber);
-          printf("%d requested, %d retrieved\n",rowNumber,store[storeLocation][0]);
           for (int j=1;j<=IMWD;j++){
               fromDistributor <: store[storeLocation][j];
           }
@@ -489,7 +487,6 @@ void store(chanend fromHarvester,chanend fromDistributor) {
           //harvester tells the worker which row it wants
           fromHarvester :> rowNumber;
           storeLocation = hashFunction(rowNumber);
-          printf("%d requested, %d retrieved\n",rowNumber,store[storeLocation][0]);
           for (int j=1;j<=IMWD;j++){
               fromHarvester <: store[storeLocation][j];
           }

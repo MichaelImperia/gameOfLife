@@ -4,8 +4,8 @@ typedef unsigned char uchar;
 #include <stdio.h>
 #include <timer.h>
 #include "pgmIO.h"
-#define IMHT 64
-#define IMWD 64
+#define IMHT 16
+#define IMWD 16
 out port cled0 = PORT_CLOCKLED_0;
 out port cled1 = PORT_CLOCKLED_1;
 out port cled2 = PORT_CLOCKLED_2;
@@ -32,6 +32,7 @@ void buttonListener(in port b, chanend toDataIn, chanend toDist){
     int r;
       while (1) {
         b when pinsneq(15) :> r;// check if some buttons are pressed
+        printf("button pressed\n");
         //Triggers the start of image processing
         if(r == 14){
             start = 1;
@@ -40,17 +41,21 @@ void buttonListener(in port b, chanend toDataIn, chanend toDist){
         //Triggers the game to be paused
         else if(r == 13){
             paused = 1;
+            printf("button terminating\n");
+            return;
 
         }
         //Triggers the export of the current game as a PNG file
         else if(r == 11){
-
+            printf("button terminating\n");
+            return;
         }
         //Triggers the program to terminate gracefully
         else if(r == 7){
             terminate = 1;
             toDist <: terminate;
         }
+        delay_milliseconds(250);
     }
 }
 
@@ -332,7 +337,6 @@ void distributor(chanend c_in, chanend toWork[], chanend toStore[], chanend toHa
           printf("syncing...\n");
           toHarvester <: 0;
           toHarvester <: isTerminated;
-          printf("%d\n",isTerminated);
           printf("done\n");
           break;
       }
@@ -452,28 +456,16 @@ void store(chanend fromHarvester,chanend fromDistributor) {
       //0 means work request
       if (distribInstruction == 0) {
           fromDistributor :> rowNumber;
-          found = 0;
-          for (int i=0; i<IMHT/4; i++){
-              if (store[i][0] == rowNumber){
-                  for (int j=1;j<=IMWD;j++){
-                      fromDistributor <: store[i][j];
-                  }
-                  found = 1;
-                  break;
-              }
+          storeLocation = hashFunction(rowNumber);
+          printf("%d requested, %d retrieved\n",rowNumber,store[storeLocation][0]);
+          for (int j=1;j<=IMWD;j++){
+              fromDistributor <: store[storeLocation][j];
           }
-          if (!found) {
-              printf("STORE ERROR FINDING ARRAY %d DIST\n",rowNumber);
-              for (int i=0; i<IMHT/4; i++){
-                  printf("%d,%d\n",i,store[i][0]);
-              }
-          }
-          else found = 0;
       }
       //instruction from harvester
       //0 means terminate
       //1 means harvester wants info to print out
-      //2 means harvester will send info into the store no care needed in placing
+      //2 means harvester will send info into the store
       //3 means print stored arrays
       //4 means reset store location
       else if (harvestInstruction == 4) {
@@ -496,23 +488,11 @@ void store(chanend fromHarvester,chanend fromDistributor) {
       else if (harvestInstruction == 1) {
           //harvester tells the worker which row it wants
           fromHarvester :> rowNumber;
-          found = 0;
-          for (int i=0; i<IMHT/4; i++){
-              if (store[i][0] == rowNumber){
-                  for (int j=1;j<=IMWD;j++){
-                      fromHarvester <: store[i][j];
-                  }
-                  found = 1;
-                  break;
-              }
+          storeLocation = hashFunction(rowNumber);
+          printf("%d requested, %d retrieved\n",rowNumber,store[storeLocation][0]);
+          for (int j=1;j<=IMWD;j++){
+              fromHarvester <: store[storeLocation][j];
           }
-          if (!found) {
-              printf("STORE ERROR FINDING ARRAY HARV\n");
-              for (int i=0; i<IMHT/4; i++){
-                  printf("%d,%d\n",i,store[i][0]);
-              }
-          }
-          else found = 0;
       }
       else if (harvestInstruction == 0) break;
 

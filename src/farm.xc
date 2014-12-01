@@ -4,8 +4,9 @@ typedef unsigned char uchar;
 #include <stdio.h>
 #include <timer.h>
 #include "pgmIO.h"
-#define IMHT 16
-#define IMWD 16
+//MUST BE MULTIPLE OF 8
+#define IMHT 256
+#define IMWD 256
 out port cled0 = PORT_CLOCKLED_0;
 out port cled1 = PORT_CLOCKLED_1;
 out port cled2 = PORT_CLOCKLED_2;
@@ -106,6 +107,31 @@ void visualiser(chanend fromDist,
         toQuadrant2 <: array[1];
         toQuadrant3 <: array[0];
     }
+}
+
+//takes in array of 8 uchars and converts them to be stored in one uchar
+uchar convertFromBitForm(uchar line[8]){
+    uchar cell = 0;
+    if(line[0] == 255){
+        cell++;
+    }
+    for(int i = 1; i < 8; i++){
+        cell = cell << 1;
+        if(line[i] == 255){
+            cell++;
+        }
+    }
+    return cell;
+}
+
+//takes in one uchar and converts it to an array of 8 uchars
+//if we take in chanend it wont have to store size 8 array but it's tiny
+void convertToBitForm(uchar line[8], uchar input){
+    for(int i = 0; i < 8; i++){
+        if ((1&(input>>(7-i)))) line[i] = 255;
+        else line[i] = 0;
+    }
+    return;
 }
 
 void buttonListener(in port b, chanend toDataIn, chanend toDist){
@@ -228,6 +254,19 @@ void DataInStream(char infname[], chanend c_out, chanend fromButton)
   return;
 }
 
+//fill array for when the input is in read from pgm form
+void fillArrayComplex(chanend c, uchar array[], int arraySize){
+  uchar segment[IMWD/8];
+  if (arraySize != IMWD/8) printf("make sure arraysize is IMWD/8, crash inc\n");
+  for (int i=0; i<arraySize; i++){
+      for (int j=0; j<8; j++){
+          c :> segment[j];
+      }
+      array[i] = convertFromBitForm(segment);
+  }
+  return;
+}
+
 void fillArray(chanend c, uchar array[], int arraySize){
   for (int i=0; i<arraySize; i++){
       c :> array[i];
@@ -247,19 +286,22 @@ void establishArrays(int numberOfCycles, chanend c_in, uchar above[], uchar calc
   //first time leaves row above to 0s
   //and reads two lines not one
   if (numberOfCycles != 1) {
-      makeEqualArrays(above,calculate,IMWD);
-      makeEqualArrays(calculate,below,IMWD);
+      makeEqualArrays(above,calculate,IMWD/8);
+      makeEqualArrays(calculate,below,IMWD/8);
   }
   else {
-      fillArray(c_in, calculate, IMWD);
+      for (int i=0;i<IMWD/8;i++){
+          above[i] = 0;
+      }
+      fillArrayComplex(c_in, calculate, IMWD/8);
   }
 
   //last time sets row below to 0s
   if (numberOfCycles != IMHT) {
-      fillArray(c_in, below, IMWD);
+      fillArrayComplex(c_in, below, IMWD/8);
   }
   else {
-      uchar below[IMWD] = {0};
+      uchar below[IMWD/8] = {0};
   }
   return;
 }
@@ -268,16 +310,16 @@ void establishArraysFromStore(int numberOfCycles, chanend c_in[], uchar above[],
   //first time leaves row above to 0s
   //and reads two lines not one
   if (numberOfCycles-1 != 1) {
-      makeEqualArrays(above,calculate,IMWD);
-      makeEqualArrays(calculate,below,IMWD);
+      makeEqualArrays(above,calculate,IMWD/8);
+      makeEqualArrays(calculate,below,IMWD/8);
   }
   else {
-      for (int i=0;i<IMWD;i++){
+      for (int i=0;i<IMWD/8;i++){
           above[i] = 0;
       }
       c_in[(numberOfCycles-1)%4] <: 0;
       c_in[(numberOfCycles-1)%4] <: (numberOfCycles-1);
-      fillArray(c_in[(numberOfCycles-1)%4], calculate, IMWD);
+      fillArray(c_in[(numberOfCycles-1)%4], calculate, IMWD/8);
   }
 
   //last time sets row below to 0s
@@ -285,10 +327,10 @@ void establishArraysFromStore(int numberOfCycles, chanend c_in[], uchar above[],
 
       c_in[numberOfCycles%4] <: 0;
       c_in[numberOfCycles%4] <: numberOfCycles;
-      fillArray(c_in[numberOfCycles%4], below, IMWD);
+      fillArray(c_in[numberOfCycles%4], below, IMWD/8);
   }
   else {
-      uchar below[IMWD] = {0};
+      uchar below[IMWD/8] = {0};
   }
   return;
 }
@@ -299,66 +341,88 @@ void read(uchar above[], uchar calculate[], uchar below[], chanend fromDist, int
   fromDist :> below[cellIndex];
 }
 
-uchar addOneIfLive(uchar count, uchar input){
-  if (input == 255){
-      return count+1;
+int getCharIndex(int cellIndex){
+  while(cellIndex%8 != 0){
+      cellIndex--;
   }
-  return count;
+  return cellIndex/8;
+}
+
+//checks 2/3 values for life, index and either side
+//set isCalc to 1 to not count index
+//can take any array point, it's mildly clever
+uchar areAliveAroundIndex(uchar array[], int cellIndex, int charIndex, int isCalc){
+  uchar output = 0;
+  //the index of the bit within the char
+  int localIndex = cellIndex%8;
+  //the bit itself is checked
+  if (!isCalc) output += 1&(array[charIndex]>>(7-localIndex));
+  //end of one char, need to check ms bit of next one
+  if (localIndex == 7){
+      output += 1&(array[charIndex]>>(8-localIndex));
+      if (charIndex != (IMWD/8-1)) {
+          output += ((128&(array[charIndex+1]))>>7);
+      }
+  }
+  //start of one char, need to check ls bit of previous one
+  else if (localIndex == 0){
+      output += 1&(array[charIndex]>>(6-localIndex));
+      if (charIndex != 0) output += 1&(array[charIndex-1]);
+  }
+  else {
+      //here we know it is safe to do this
+      output += 1&(array[charIndex]>>(6-localIndex));
+      output += 1&(array[charIndex]>>(8-localIndex));
+  }
+  return output;
 }
 
 uchar numberOfNeighbours(uchar abv[],
                          uchar cal[],
                          uchar blw[],
-                         int cellIndex) {
+                         int cellIndex,
+                         int charIndex) {
   uchar output = 0;
-  output = addOneIfLive(output,abv[cellIndex]);
-  output = addOneIfLive(output,blw[cellIndex]);
-  if (cellIndex != 0) {
-      output = addOneIfLive(output,abv[cellIndex-1]);
-      output = addOneIfLive(output,blw[cellIndex-1]);
-      output = addOneIfLive(output,cal[cellIndex-1]);
-  }
-  if (cellIndex != IMWD-1) {
-      output = addOneIfLive(output,cal[cellIndex+1]);
-      output = addOneIfLive(output,abv[cellIndex+1]);
-      output = addOneIfLive(output,blw[cellIndex+1]);
-  }
+
+  output += areAliveAroundIndex(abv,cellIndex,charIndex,0);
+  output += areAliveAroundIndex(cal,cellIndex,charIndex,1);
+  output += areAliveAroundIndex(blw,cellIndex,charIndex,0);
 
   return output;
 }
 
-void calculateCell(uchar abv[],
+ uchar calculateCell(uchar abv[],
                     uchar cal[],
                     uchar blw[],
-                    int cellIndex,
-                    streaming chanend toHarvest){
+                    int cellIndex){
   uchar neighbours;
 
-  neighbours = numberOfNeighbours(abv,cal,blw,cellIndex);
+  //the index of the char the given bit is in
+  int charIndex = getCharIndex(cellIndex);
+
+  neighbours = numberOfNeighbours(abv,cal,blw,cellIndex,charIndex);
 
   //game logic
-  if (cal[cellIndex] == 0){
-      //printArray(cal,IMWD);
+  //this just tests if the current bit is 0
+  if (!(1&(cal[charIndex]>>(7-(cellIndex%8))))){
       if (neighbours == 3){
-          toHarvest <: (uchar) 255;
+          return (uchar) 255;
       }
       else {
-          toHarvest <: (uchar) 0;
+          return (uchar) 0;
       }
   }
   else {
       if (neighbours < 2){
-          toHarvest <: (uchar) 0;
+          return (uchar) 0;
       }
       else if (neighbours <= 3) {
-          toHarvest <: (uchar) 255;
+          return (uchar) 255;
       }
       else {
-          toHarvest <: (uchar) 0;
+          return (uchar) 0;
       }
   }
-
-  return;
 }
 
 //code sent to worker from dist is:
@@ -373,9 +437,10 @@ void worker(chanend fromDist, streaming chanend toHarvest) {
   int lineNumber;
   int width;
   int cellIndex = 0;
-  uchar above[IMWD];
-  uchar below[IMWD];
-  uchar calculate[IMWD];
+  uchar above[IMWD/8];
+  uchar below[IMWD/8];
+  uchar calculate[IMWD/8];
+  uchar working[8];
 
   while(1){
       fromDist <: (uchar) 1;
@@ -387,8 +452,11 @@ void worker(chanend fromDist, streaming chanend toHarvest) {
       }
       cellIndex = 0;
       toHarvest <: lineNumber;
-      for (int i=0; i<width; i++){
-          calculateCell(above,calculate,below,i,toHarvest);
+      for (int i=0; i<width*8; i++){
+          working[i%8] = calculateCell(above,calculate,below,i);
+          if (i%8 == 7) {
+              toHarvest <: convertFromBitForm(working);
+          }
       }
   }
 
@@ -413,9 +481,9 @@ void sendWork(chanend toWork, uchar above[], uchar calculate[], uchar below[], i
 
 void distributor(chanend c_in, chanend toWork[], chanend toStore[], chanend toHarvester, chanend fromButton)
 {
-  uchar above[IMWD] = {0};
-  uchar below[IMWD];
-  uchar calculate[IMWD];
+  uchar above[IMWD/8] = {0};
+  uchar below[IMWD/8];
+  uchar calculate[IMWD/8];
   int readFromPgm = 1;
   int rounds = 0;
   //stores game state like paused and terminated
@@ -444,25 +512,25 @@ void distributor(chanend c_in, chanend toWork[], chanend toStore[], chanend toHa
         case toWork[0] :> singleWorkerStatus:
           //printf("worker[%d]\n",0);
           if (singleWorkerStatus == 1){
-              sendWork(toWork[0],above,calculate,below,lineNumber,IMWD);
+              sendWork(toWork[0],above,calculate,below,lineNumber,IMWD/8);
           }
           break;
         case toWork[1] :> singleWorkerStatus:
         //printf("worker[%d]\n",1);
           if (singleWorkerStatus == 1){
-              sendWork(toWork[1],above,calculate,below,lineNumber,IMWD);
+              sendWork(toWork[1],above,calculate,below,lineNumber,IMWD/8);
           }
           break;
         case toWork[2] :> singleWorkerStatus:
         //printf("worker[%d]\n",2);
           if (singleWorkerStatus == 1){
-              sendWork(toWork[2],above,calculate,below,lineNumber,IMWD);
+              sendWork(toWork[2],above,calculate,below,lineNumber,IMWD/8);
           }
           break;
         case toWork[3] :> singleWorkerStatus:
         //printf("worker[%d]\n",3);
           if (singleWorkerStatus == 1){
-              sendWork(toWork[3],above,calculate,below,lineNumber,IMWD);
+              sendWork(toWork[3],above,calculate,below,lineNumber,IMWD/8);
           }
           break;
 
@@ -510,7 +578,7 @@ void distributor(chanend c_in, chanend toWork[], chanend toStore[], chanend toHa
   }
   //terminate
   printf("Distributer terminating\n");
-  for (int i=0; i<3; i++){
+  for (int i=0; i<4; i++){
       toWork[i] :> singleWorkerStatus;
       toWork[i] <: 0;
   }
@@ -522,7 +590,7 @@ void sendRowToStore(int rowCalculated, streaming chanend workToHarvester[], chan
   uchar cellStore;
   harvesterToStore[rowCalculated%4] <: 2;
   harvesterToStore[rowCalculated%4] <: rowCalculated;
-  for (int lineIndex = 0; lineIndex < IMWD; lineIndex++){
+  for (int lineIndex = 0; lineIndex < IMWD/8; lineIndex++){
       workToHarvester[index] :> cellStore;
       harvesterToStore[rowCalculated%4] <: cellStore;
   }
@@ -570,17 +638,19 @@ void harvester(streaming chanend workToHarvester[],
         }
         if (distribInstruction == 3){
             //print
-            uchar cell;
+            uchar cellBlock;
+            uchar converted[8];
             toDataOut <: 0;
             for (int i=1;i<=IMHT;i++){
-                harvesterToStore[i%4] <: 1;
-                harvesterToStore[i%4] <: i;
-                for (int j=0;j<IMWD;j++){
-                  harvesterToStore[i%4] :> cell;
-                  toOut <: cell;
-
+              harvesterToStore[i%4] <: 1;
+              harvesterToStore[i%4] <: i;
+              for (int j=0;j<IMWD/8;j++){
+                harvesterToStore[i%4] :> cellBlock;
+                convertToBitForm(converted,cellBlock);
+                for (int k=0;k<8;k++){
+                    toOut <: converted[k];
                 }
-
+              }
             }
             toDataOut <: 0;
             toDistrib :> distribInstruction;
@@ -592,18 +662,20 @@ void harvester(streaming chanend workToHarvester[],
                 if (distribInstruction == 0 || distribInstruction == 1) break;
                 else if (distribInstruction == 3){
                     //print
-                    uchar cell;
-                    toDataOut <: 0;
-                    for (int i=1;i<=IMHT;i++){
-                        harvesterToStore[i%4] <: 1;
-                        harvesterToStore[i%4] <: i;
-                        for (int j=0;j<IMWD;j++){
-                          harvesterToStore[i%4] :> cell;
-                          toOut <: cell;
-
-                        }
-
-                    }
+                    uchar cellBlock;
+                     uchar converted[8];
+                     toDataOut <: 0;
+                     for (int i=1;i<=IMHT;i++){
+                       harvesterToStore[i%4] <: 1;
+                       harvesterToStore[i%4] <: i;
+                       for (int j=0;j<IMWD/8;j++){
+                         harvesterToStore[i%4] :> cellBlock;
+                         convertToBitForm(converted,cellBlock);
+                         for (int k=0;k<8;k++){
+                             toOut <: converted[k];
+                         }
+                       }
+                     }
                     toDataOut <: 0;
                     toDistrib :> distribInstruction;
                     //print
@@ -631,7 +703,7 @@ int hashFunction(int rowNumber){
 //from distib needs to be added so we can easily cycle into another round
 void store(chanend fromHarvester,chanend fromDistributor) {
   //change to make sure it always has space
-  uchar store[IMHT/4][IMWD+1];
+  uchar store[IMHT/4][(IMWD/4)+1];
   int harvestInstruction;
   int distribInstruction;
   int rowNumber;
@@ -651,7 +723,7 @@ void store(chanend fromHarvester,chanend fromDistributor) {
       if (distribInstruction == 0) {
           fromDistributor :> rowNumber;
           storeLocation = hashFunction(rowNumber);
-          for (int j=1;j<=IMWD;j++){
+          for (int j=1;j<=IMWD/8;j++){
               fromDistributor <: store[storeLocation][j];
           }
       }
@@ -673,7 +745,7 @@ void store(chanend fromHarvester,chanend fromDistributor) {
           fromHarvester :> rowNumber;
           storeLocation = hashFunction(rowNumber);
           store[storeLocation][0] = (uchar) rowNumber;
-          for(int i=1;i<=IMWD;i++){
+          for(int i=1;i<=IMWD/8;i++){
               fromHarvester :> store[storeLocation][i];
           }
 
@@ -682,7 +754,7 @@ void store(chanend fromHarvester,chanend fromDistributor) {
           //harvester tells the worker which row it wants
           fromHarvester :> rowNumber;
           storeLocation = hashFunction(rowNumber);
-          for (int j=1;j<=IMWD;j++){
+          for (int j=1;j<=IMWD/8;j++){
               fromHarvester <: store[storeLocation][j];
           }
       }
@@ -758,9 +830,9 @@ int main()
     on stdcore[2]: DataOutStream( outfname, harvesterToOut,harvestToDataOut );
     on stdcore[3]: harvester(workToHarvester,harvesterToStore,harvesterToOut,distribToHarvest,harvestToDataOut);
     on stdcore[0]: worker(distToWork[0],workToHarvester[0]);
-    //on stdcore[1]: worker(distToWork[1],workToHarvester[1]);
-    on stdcore[2]: worker(distToWork[1],workToHarvester[1]);
-    on stdcore[3]: worker(distToWork[2],workToHarvester[2]);
+    on stdcore[1]: worker(distToWork[1],workToHarvester[1]);
+    on stdcore[2]: worker(distToWork[2],workToHarvester[2]);
+    on stdcore[3]: worker(distToWork[3],workToHarvester[3]);
     on stdcore[0]: store(harvesterToStore[0],distribToStore[0]);
     on stdcore[1]: store(harvesterToStore[1],distribToStore[1]);
     on stdcore[2]: store(harvesterToStore[2],distribToStore[2]);

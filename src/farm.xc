@@ -5,8 +5,8 @@ typedef unsigned char uchar;
 #include <timer.h>
 #include "pgmIO.h"
 //MUST BE MULTIPLE OF 8
-#define IMHT 64
-#define IMWD 64
+#define IMHT 512
+#define IMWD 512
 out port cled0 = PORT_CLOCKLED_0;
 out port cled1 = PORT_CLOCKLED_1;
 out port cled2 = PORT_CLOCKLED_2;
@@ -15,21 +15,14 @@ out port cledG = PORT_CLOCKLED_SELG;
 out port cledR = PORT_CLOCKLED_SELR;
 in port  buttons = PORT_BUTTON;
 
-char infname[] = "test.pgm";     //put your input image path here, absolute path
+char infname[] = "hello.pgm";     //put your input image path here, absolute path
 char outfname[] = "testout.pgm"; //put your output image path here, absolute path
-
-void printArray(uchar array[], int arraysize){
-  printf("[");
-  for(int i=0;i<arraysize;i++){
-      printf("%d,",array[i]);
-  }
-  printf("]\n");
-}
 
 int showLED(out port p, chanend fromVisualiser) {
     unsigned int lightUpPattern;
     while (1) {
         fromVisualiser :> lightUpPattern; //read LED pattern from visualiser process
+        if (lightUpPattern == 1) break;
         p <: lightUpPattern;              //send pattern to LEDs
     }
     return 0;
@@ -40,7 +33,6 @@ void decimalToBinary(int output[], int decimal){
     int i=0;
     int binaryNum[12] = {0};
     int segmentTotal = 0, currentIndex = 0;
-
     //build the binary number in reverse in binaryNum[]
     while(a != 0){
         binaryNum[i] = a%2;
@@ -49,7 +41,6 @@ void decimalToBinary(int output[], int decimal){
 
         i++;
     }
-
     //build the binary number so the LED's are able to correctly choose which LED to light.
     for(i=0; i<4; i++){
         if (binaryNum[currentIndex] == 1) segmentTotal += 4;
@@ -66,41 +57,56 @@ void visualiser(chanend fromDist,
                 chanend toQuadrant0,
                 chanend toQuadrant1,
                 chanend toQuadrant2,
-                chanend toQuadrant3,
-                chanend fromDistibutor)
+                chanend toQuadrant3)
 {
     int isPaused = 0;
     int currentRound = 0;
     int totalCells = 0;
-    int liveCellsOnRow = 0;
-    cledR <: 1;
+    int array[4] = {0};
+    int isRed = 1;
+    cledR <: isRed;
     while(1){
-        int array[4] = {0};
 
-        /*select{
-            //dist sends a 1 to indicate game is paused
-            //dist then send currentRound for display by the LEDs
-            case fromDist :> isPaused:
-                fromDist :> currentRound;
-                decimalToBinary(array, currentRound);
-                break;
-            case fromWorker[0] :> liveCellsOnRow:
-                totalCells += liveCellsOnRow;
-                break;
-            case fromWorker[1] :> liveCellsOnRow:
-                totalCells += liveCellsOnRow;
-                break;
-            case fromWorker[2] :> liveCellsOnRow:
-                totalCells += liveCellsOnRow;
-                break;
-            case fromWorker[3] :> liveCellsOnRow:
-                totalCells += liveCellsOnRow;
-                break;
-        }*/
+        fromDist :> isPaused;
 
         //If not paused, prepare array for dispplay with number of cells alive
-        if(!isPaused){
+        if(isPaused == 0){
+            fromDist :> totalCells;
+            //not enough leds
+            //divide by 100 and show in green
+            if (totalCells >= 4096) {
+                isRed = 0;
+                totalCells = totalCells/100;
+                if (totalCells > 4095) totalCells = 4095;
+            }
+            else {
+                isRed = 1;
+            }
+            cledR <: isRed;
+            cledG <: !isRed;
             decimalToBinary(array, totalCells);
+        }
+        else if (isPaused == 1){
+            fromDist :> currentRound;
+            decimalToBinary(array, currentRound);
+        }
+        //terminate
+        else if(isPaused == 2){
+            toQuadrant0 <: 0;
+            toQuadrant1 <: 0;
+            toQuadrant2 <: 0;
+            toQuadrant3 <: 0;
+            toQuadrant0 <: 1;
+            toQuadrant1 <: 1;
+            toQuadrant2 <: 1;
+            toQuadrant3 <: 1;
+            break;
+        }
+        //switch colour
+        else if(isPaused == 3){
+            isRed = !isRed;
+            cledR <: isRed;
+            cledG <: !isRed;
         }
         //Display current information on LEDs (Number of cells alive or current round)
         toQuadrant0 <: array[3];
@@ -108,6 +114,7 @@ void visualiser(chanend fromDist,
         toQuadrant2 <: array[1];
         toQuadrant3 <: array[0];
     }
+    return;
 }
 
 //takes in array of 8 uchars and converts them to be stored in one uchar
@@ -126,7 +133,6 @@ uchar convertFromBitForm(uchar line[8]){
 }
 
 //takes in one uchar and converts it to an array of 8 uchars
-//if we take in chanend it wont have to store size 8 array but it's tiny
 void convertToBitForm(uchar line[8], uchar input){
     for(int i = 0; i < 8; i++){
         if ((1&(input>>(7-i)))) line[i] = 255;
@@ -159,29 +165,28 @@ void buttonListener(in port b, chanend toDataIn, chanend toDist){
             //Triggers the game to be paused
             else if(r == 13 && start){
                 if (gameState == 2) {
-                    printf("unpaused state\n");
                     gameState = 0;
                 }
                 else {
-                    printf("paused state\n");
+                    printf("Paused\n");
                     gameState = 2;
                 }
             }
             //Triggers the export of the current game as a PNG file
             else if(r == 11 && start){
-                printf("print state\n");
+                //printf("print state\n");
                 gameState = 3;
             }
             //Triggers the program to terminate gracefully
             else if(r == 7 && start){
                 gameState = 1;
-                printf("terminate state\n");
+                //printf("terminate state\n");
             }
             break;
           case toDist :> distMessage:
             if (distMessage == 1){
                 toDataIn <: 2;
-                printf("button terminating\n");
+                //printf("button terminating\n");
                 return;
             }
 
@@ -197,13 +202,14 @@ void buttonListener(in port b, chanend toDataIn, chanend toDist){
                     delay_milliseconds(250);
                     //unpause
                     if (r == 13) {
+                        printf("Unpaused\n");
                         gameState = 0;
                         toDist <: gameState;
                         break;
                     }
                     //restart
                     else if (r == 14) {
-                        printf("Restart state\n");
+                        printf("Restarting\n");
                         gameState = 4;
                         toDist <: gameState;
                         start = 0;
@@ -246,7 +252,7 @@ void DataInStream(char infname[], chanend c_out, chanend fromButton)
     fromButton :> instruction;
     if (instruction == 2) break;
 
-    printf( "DataInStream:Start...\n" );
+    printf( "Reading in...\n" );
     res = _openinpgm( infname, IMWD, IMHT );
     if( res )
     {
@@ -269,14 +275,15 @@ void DataInStream(char infname[], chanend c_out, chanend fromButton)
       //printf( "\n" ); //uncomment to show image values
     }
     _closeinpgm();
+    printf( "...reading done\n" );
   }
-  printf( "DataInStream:Done...\n" );
+  //printf( "DataInStream:Done...\n" );
   return;
 }
 
 //fill array for when the input is in read from pgm form
 void fillArrayComplex(chanend c, uchar array[], int arraySize){
-  uchar segment[IMWD/8];
+  uchar segment[8];
   if (arraySize != IMWD/8) printf("make sure arraysize is IMWD/8, crash inc\n");
   for (int i=0; i<arraySize; i++){
       for (int j=0; j<8; j++){
@@ -445,6 +452,14 @@ uchar numberOfNeighbours(uchar abv[],
   }
 }
 
+int addUpChar(uchar input[8]){
+  int output = 0;
+  for (int i=0;i<8;i++){
+      if (input[i] == 255) output++;
+  }
+  return output;
+}
+
 //code sent to worker from dist is:
 //0 - no work remains
 //(1-(IMHT))(1-IMWD)(0|255)+ - line number, how much to process, info
@@ -456,6 +471,7 @@ uchar numberOfNeighbours(uchar abv[],
 void worker(chanend fromDist, streaming chanend toHarvest) {
   int lineNumber;
   int width;
+  int liveCells = 0;
   int cellIndex = 0;
   uchar above[IMWD/8];
   uchar below[IMWD/8];
@@ -465,27 +481,42 @@ void worker(chanend fromDist, streaming chanend toHarvest) {
   while(1){
       fromDist <: (uchar) 1;
       fromDist :> lineNumber;
+
+      //terminate
       if (lineNumber == 0) break;
-      fromDist :> width;
-      for (int i=0; i<width; i++){
-          read(above,calculate,below,fromDist,i);
+      //do work on incoming input
+      else if (lineNumber == 1){
+        fromDist :> lineNumber;
+
+        fromDist :> width;
+        for (int i=0; i<width; i++){
+            read(above,calculate,below,fromDist,i);
+        }
+        cellIndex = 0;
+        toHarvest <: lineNumber;
+        for (int i=0; i<width*8; i++){
+            working[i%8] = calculateCell(above,calculate,below,i);
+            if (i%8 == 7) {
+                liveCells += addUpChar(working);
+                toHarvest <: convertFromBitForm(working);
+            }
+        }
       }
-      cellIndex = 0;
-      toHarvest <: lineNumber;
-      for (int i=0; i<width*8; i++){
-          working[i%8] = calculateCell(above,calculate,below,i);
-          if (i%8 == 7) {
-              toHarvest <: convertFromBitForm(working);
-          }
+      //else send how many cells were alive
+      else if (lineNumber == 2){
+          fromDist <: liveCells;
+          liveCells = 0;
       }
   }
 
-  printf("Worker terminating\n");
+  //printf("Worker terminating\n");
 
   return;
 }
 
 void sendWork(chanend toWork, uchar above[], uchar calculate[], uchar below[], int lineNumber, int arraySize) {
+  //"work inc"
+  toWork <: 1;
   //send line number
   toWork <: lineNumber;
   //send size of blocks
@@ -499,7 +530,7 @@ void sendWork(chanend toWork, uchar above[], uchar calculate[], uchar below[], i
   return;
 }
 
-void distributor(chanend c_in, chanend toWork[], chanend toStore[], chanend toHarvester, chanend fromButton)
+void distributor(chanend c_in, chanend toWork[], chanend toStore[], chanend toHarvester, chanend fromButton, chanend toVisualiser)
 {
   uchar above[IMWD/8] = {0};
   uchar below[IMWD/8];
@@ -509,6 +540,8 @@ void distributor(chanend c_in, chanend toWork[], chanend toStore[], chanend toHa
   //stores game state like paused and terminated
   int isTerminated = 0;
   int lineNumber = 1;
+  int oneWorkerLive;
+  int totalLive = 0;
   uchar singleWorkerStatus;
 
   //ARRAYS ESTABLISHED, WORKERS CAN NOW BE SENT
@@ -519,6 +552,8 @@ void distributor(chanend c_in, chanend toWork[], chanend toStore[], chanend toHa
   printf( "Image size = %dx%d\n", IMHT, IMWD );
 
   while(1){
+    totalLive = 0;
+    //printf("Current Round = %d\n", rounds);
     while(1){
       //printf("%d\n",lineNumber);
       //ESTABLISH THE ARRAYS
@@ -559,11 +594,20 @@ void distributor(chanend c_in, chanend toWork[], chanend toStore[], chanend toHa
 
       //sync zone
       if (lineNumber == IMHT) {
+          totalLive = 0;
           readFromPgm = 0;
           lineNumber = 1;
           //sync with harvester
           //printf("syncing...\n");
           toHarvester <: 0;
+          //get live cell count
+          for (int i=0;i<4;i++){
+              toWork[i] :> singleWorkerStatus;
+              toWork[i] <: 2;
+              toWork[i] :> oneWorkerLive;
+              totalLive += oneWorkerLive;
+          }
+          //printf("%d\n",totalLive);
           //check if user wants to terminate, print, pause or continue
           fromButton <: 0;
           fromButton :> isTerminated;
@@ -571,22 +615,27 @@ void distributor(chanend c_in, chanend toWork[], chanend toStore[], chanend toHa
 
           if (isTerminated == 2){
               while(1){
+                  printf("Current Round = %d\n", rounds);
+                  toVisualiser <: 1;
+                  toVisualiser <: rounds;
                   fromButton :> isTerminated;
                   toHarvester <: isTerminated;
-                  if (isTerminated == 0 || isTerminated == 1 || isTerminated == 4) break;
+                  if (isTerminated == 0 || isTerminated == 1 || isTerminated == 4) {
+                      break;
+                  }
                   else if (isTerminated == 3) {
                       toHarvester <: 0;
                   }
               }
           }
+          toVisualiser <: 0;
+          toVisualiser <: totalLive;
           if (isTerminated == 4){
               uchar above[IMWD/8] = {0};
               readFromPgm = 1;
               rounds = 0;
               lineNumber = 1;
-              printf("got work\n");
               fromButton <: 0;
-              printf("got work\n");
           }
           //delay so data out can work
           if (isTerminated == 3){
@@ -596,6 +645,7 @@ void distributor(chanend c_in, chanend toWork[], chanend toStore[], chanend toHa
           if (isTerminated == 1){
               //tell button listener to end
               fromButton <: 1;
+              toVisualiser <: 2;
           }
 
           //printf("done\n");
@@ -603,22 +653,20 @@ void distributor(chanend c_in, chanend toWork[], chanend toStore[], chanend toHa
       }
       lineNumber++;
     }
-    printf("Current Round = %d\n", rounds);
     if (isTerminated == 1) break;
     else if (isTerminated == 4) {
-        printf("restarting\n");
         isTerminated = 0;
     }
     rounds++;
   }
   //terminate
-  printf("Distributer terminating\n");
+  //printf("Distributer terminating\n");
   for (int i=0; i<4; i++){
       toWork[i] :> singleWorkerStatus;
       toWork[i] <: 0;
   }
 
-  printf( "ProcessImage:Done...\n" );
+  //printf( "ProcessImage:Done...\n" );
 }
 
 void sendRowToStore(int rowCalculated, streaming chanend workToHarvester[], chanend harvesterToStore[],int index) {
@@ -731,7 +779,7 @@ void harvester(streaming chanend workToHarvester[],
         }
     }
   }
-  printf("terminating harvester\n");
+  //printf("terminating harvester\n");
   return;
 }
 
@@ -801,7 +849,7 @@ void store(chanend fromHarvester,chanend fromDistributor) {
       else if (harvestInstruction == 0) break;
 
   }
-  printf("terminating store\n");
+  //printf("terminating store\n");
 }
 /////////////////////////////////////////////////////////////////////////////////////////
 //
@@ -821,7 +869,7 @@ void DataOutStream(char outfname[], chanend c_in, chanend fromHarvester)
     if (harvestInstruction == 2){
         break;
     }
-    printf( "DataOutStream:Start...\n" );
+    printf( "Printing out...\n" );
     res = _openoutpgm( outfname, IMWD, IMHT );
     if( res )
     {
@@ -840,15 +888,15 @@ void DataOutStream(char outfname[], chanend c_in, chanend fromHarvester)
       if (y%(IMHT/4) == 0){
           if (y == IMHT/4) printf("25%%\n");
           else if (y == IMHT/2) printf("50%%\n");
-          if (y == 3*IMHT/4) printf("75%%\n");
+          else if (y == 3*IMHT/4) printf("75%%\n");
       }
     }
-    printf( "DataOutStream:Printed...\n" );
+    printf( "...done printing\n" );
     _closeoutpgm();
     fromHarvester :> harvestInstruction;
   }
 
-  printf( "DataOutStream:Terminating...\n" );
+  //printf( "DataOutStream:Terminating...\n" );
   return;
 }
 
@@ -864,31 +912,29 @@ int main()
   chan buttonToDataIn;
   chan buttonToDist;
   chan harvestToDataOut;
-  chan workerToVisualiser[4];
   chan distToVisualiser;
   chan quadrant0,quadrant1,quadrant2,quadrant3;
   par //extend/change this par statement
   {
     on stdcore[1]: DataInStream( infname, c_inIO, buttonToDataIn );
     on stdcore[0]: buttonListener(buttons, buttonToDataIn, buttonToDist);
-    on stdcore[0]: distributor( c_inIO, distToWork,distribToStore,distribToHarvest, buttonToDist);
+    on stdcore[2]: distributor( c_inIO, distToWork,distribToStore,distribToHarvest, buttonToDist, distToVisualiser);
     on stdcore[2]: DataOutStream( outfname, harvesterToOut,harvestToDataOut );
     on stdcore[3]: harvester(workToHarvester,harvesterToStore,harvesterToOut,distribToHarvest,harvestToDataOut);
     on stdcore[0]: worker(distToWork[0],workToHarvester[0]);
-    on stdcore[2]: worker(distToWork[1],workToHarvester[1]);
+    on stdcore[0]: worker(distToWork[1],workToHarvester[1]);
     on stdcore[2]: worker(distToWork[2],workToHarvester[2]);
     on stdcore[3]: worker(distToWork[3],workToHarvester[3]);
     on stdcore[0]: store(harvesterToStore[0],distribToStore[0]);
     on stdcore[1]: store(harvesterToStore[1],distribToStore[1]);
     on stdcore[2]: store(harvesterToStore[2],distribToStore[2]);
     on stdcore[3]: store(harvesterToStore[3],distribToStore[3]);
-    on stdcore[0]: visualiser(distToVisualiser,quadrant0,quadrant1,quadrant2,quadrant3,distToVisualiser);
+    on stdcore[0]: visualiser(distToVisualiser,quadrant0,quadrant1,quadrant2,quadrant3);
     on stdcore[0]: showLED(cled0,quadrant0);
     on stdcore[1]: showLED(cled1,quadrant1);
     on stdcore[2]: showLED(cled2,quadrant2);
-    on stdcore[3]: showLED(cled3,quadrant3);  //Uncomment to start using the visualiser
+    on stdcore[3]: showLED(cled3,quadrant3);
   }
-  //printf( "Main:Done...\n" );
   return 0;
 }
 

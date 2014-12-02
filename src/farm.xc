@@ -5,8 +5,8 @@ typedef unsigned char uchar;
 #include <timer.h>
 #include "pgmIO.h"
 //MUST BE MULTIPLE OF 8
-#define IMHT 256
-#define IMWD 256
+#define IMHT 64
+#define IMWD 64
 out port cled0 = PORT_CLOCKLED_0;
 out port cled1 = PORT_CLOCKLED_1;
 out port cled2 = PORT_CLOCKLED_2;
@@ -67,7 +67,7 @@ void visualiser(chanend fromDist,
                 chanend toQuadrant1,
                 chanend toQuadrant2,
                 chanend toQuadrant3,
-                chanend fromWorker[])
+                chanend fromDistibutor)
 {
     int isPaused = 0;
     int currentRound = 0;
@@ -76,7 +76,8 @@ void visualiser(chanend fromDist,
     cledR <: 1;
     while(1){
         int array[4] = {0};
-        select{
+
+        /*select{
             //dist sends a 1 to indicate game is paused
             //dist then send currentRound for display by the LEDs
             case fromDist :> isPaused:
@@ -95,7 +96,7 @@ void visualiser(chanend fromDist,
             case fromWorker[3] :> liveCellsOnRow:
                 totalCells += liveCellsOnRow;
                 break;
-        }
+        }*/
 
         //If not paused, prepare array for dispplay with number of cells alive
         if(!isPaused){
@@ -141,11 +142,14 @@ void buttonListener(in port b, chanend toDataIn, chanend toDist){
     //1 means terminate
     //2 means pause
     //3 means print
+    //4 means restart
     int gameState = 0;
     int r;
       while (1) {
+        if (!start) printf( "Press A to begin processing the image\n");
         select {
           case b when pinsneq(15) :> r:// check if some buttons are pressed
+            delay_milliseconds(150);
             //Triggers the start of image processing
             //can only be pressed when game is not started
             if(r == 14 && !start){
@@ -176,9 +180,11 @@ void buttonListener(in port b, chanend toDataIn, chanend toDist){
             break;
           case toDist :> distMessage:
             if (distMessage == 1){
+                toDataIn <: 2;
                 printf("button terminating\n");
                 return;
             }
+
             toDist <: gameState;
             //so we dont print every time
             if (gameState == 3) {
@@ -197,7 +203,13 @@ void buttonListener(in port b, chanend toDataIn, chanend toDist){
                     }
                     //restart
                     else if (r == 14) {
-                        //do stuff
+                        printf("Restart state\n");
+                        gameState = 4;
+                        toDist <: gameState;
+                        start = 0;
+                        gameState = 0;
+                        //ready to restart
+                        toDist :> distMessage;
                         break;
                     }
                     //printout
@@ -215,7 +227,7 @@ void buttonListener(in port b, chanend toDataIn, chanend toDist){
             }
             break;
         }
-        delay_milliseconds(250);
+        //delay_milliseconds(150);
     }
 }
 
@@ -230,26 +242,34 @@ void DataInStream(char infname[], chanend c_out, chanend fromButton)
   int instruction = 0;
   uchar line[ IMWD ];
 
-  fromButton :> instruction;
+  while (1){
+    fromButton :> instruction;
+    if (instruction == 2) break;
 
-  printf( "DataInStream:Start...\n" );
-  res = _openinpgm( infname, IMWD, IMHT );
-  if( res )
-  {
-    printf( "DataInStream:Error openening %s\n.", infname );
-    return;
-  }
-  for( int y = 0; y < IMHT; y++ )
-  {
-    _readinline( line, IMWD );
-    for( int x = 0; x < IMWD; x++ )
+    printf( "DataInStream:Start...\n" );
+    res = _openinpgm( infname, IMWD, IMHT );
+    if( res )
     {
-      c_out <: line[ x ];
-      //printf( "-%4.1d ", line[ x ] ); //uncomment to show image values
+      printf( "DataInStream:Error openening %s\n.", infname );
+      return;
     }
-    //printf( "\n" ); //uncomment to show image values
+    for( int y = 0; y < IMHT; y++ )
+    {
+      _readinline( line, IMWD );
+      for( int x = 0; x < IMWD; x++ )
+      {
+        c_out <: line[ x ];
+        //printf( "-%4.1d ", line[ x ] ); //uncomment to show image values
+      }
+      if (y%(IMHT/4) == 0){
+          if (y == IMHT/4) printf("25%%\n");
+          else if (y == IMHT/2) printf("50%%\n");
+          if (y == 3*IMHT/4) printf("75%%\n");
+      }
+      //printf( "\n" ); //uncomment to show image values
+    }
+    _closeinpgm();
   }
-  _closeinpgm();
   printf( "DataInStream:Done...\n" );
   return;
 }
@@ -497,13 +517,14 @@ void distributor(chanend c_in, chanend toWork[], chanend toStore[], chanend toHa
   //1 - Wants work
 
   printf( "Image size = %dx%d\n", IMHT, IMWD );
-  printf( "Press A to begin processing the image\n");
 
   while(1){
     while(1){
-      printf("%d\n",lineNumber);
+      //printf("%d\n",lineNumber);
       //ESTABLISH THE ARRAYS
-      if (readFromPgm == 1) establishArrays(lineNumber,c_in,above,calculate,below);
+      if (readFromPgm == 1) {
+          establishArrays(lineNumber,c_in,above,calculate,below);
+      }
       else {
           establishArraysFromStore(lineNumber+1,toStore,above,calculate,below);
       }
@@ -541,7 +562,7 @@ void distributor(chanend c_in, chanend toWork[], chanend toStore[], chanend toHa
           readFromPgm = 0;
           lineNumber = 1;
           //sync with harvester
-          printf("syncing...\n");
+          //printf("syncing...\n");
           toHarvester <: 0;
           //check if user wants to terminate, print, pause or continue
           fromButton <: 0;
@@ -552,28 +573,42 @@ void distributor(chanend c_in, chanend toWork[], chanend toStore[], chanend toHa
               while(1){
                   fromButton :> isTerminated;
                   toHarvester <: isTerminated;
-                  if (isTerminated == 0 || isTerminated == 1) break;
+                  if (isTerminated == 0 || isTerminated == 1 || isTerminated == 4) break;
                   else if (isTerminated == 3) {
                       toHarvester <: 0;
                   }
               }
           }
+          if (isTerminated == 4){
+              uchar above[IMWD/8] = {0};
+              readFromPgm = 1;
+              rounds = 0;
+              lineNumber = 1;
+              printf("got work\n");
+              fromButton <: 0;
+              printf("got work\n");
+          }
           //delay so data out can work
           if (isTerminated == 3){
               toHarvester <: 0;
           }
+          //if (isTerminated == )
           if (isTerminated == 1){
               //tell button listener to end
               fromButton <: 1;
           }
 
-          printf("done\n");
+          //printf("done\n");
           break;
       }
       lineNumber++;
     }
     printf("Current Round = %d\n", rounds);
     if (isTerminated == 1) break;
+    else if (isTerminated == 4) {
+        printf("restarting\n");
+        isTerminated = 0;
+    }
     rounds++;
   }
   //terminate
@@ -626,6 +661,7 @@ void harvester(streaming chanend workToHarvester[],
         //0 means continue
         //1 means terminate
         //3 means print
+        //4 means restart
         toDistrib :> distribInstruction;
         if (distribInstruction == 0) {
             rowsRead = 0;
@@ -659,7 +695,7 @@ void harvester(streaming chanend workToHarvester[],
         if (distribInstruction == 2){
             while(1){
                 toDistrib :> distribInstruction;
-                if (distribInstruction == 0 || distribInstruction == 1) break;
+                if (distribInstruction == 0 || distribInstruction == 1 || distribInstruction == 4) break;
                 else if (distribInstruction == 3){
                     //print
                     uchar cellBlock;
@@ -688,6 +724,10 @@ void harvester(streaming chanend workToHarvester[],
               harvesterToStore[i] <: 0;
           }
           break;
+        }
+        if (distribInstruction == 4){
+            distribInstruction = 0;
+            rowsRead = 0;
         }
     }
   }
@@ -797,6 +837,11 @@ void DataOutStream(char outfname[], chanend c_in, chanend fromHarvester)
       }
       //printf("\n");
       _writeoutline( line, IMWD );
+      if (y%(IMHT/4) == 0){
+          if (y == IMHT/4) printf("25%%\n");
+          else if (y == IMHT/2) printf("50%%\n");
+          if (y == 3*IMHT/4) printf("75%%\n");
+      }
     }
     printf( "DataOutStream:Printed...\n" );
     _closeoutpgm();
@@ -819,9 +864,9 @@ int main()
   chan buttonToDataIn;
   chan buttonToDist;
   chan harvestToDataOut;
-  //chan workerToVisualiser[4];
-  //chan distToVisualiser;
-  //chan quadrant0,quadrant1,quadrant2,quadrant3;
+  chan workerToVisualiser[4];
+  chan distToVisualiser;
+  chan quadrant0,quadrant1,quadrant2,quadrant3;
   par //extend/change this par statement
   {
     on stdcore[1]: DataInStream( infname, c_inIO, buttonToDataIn );
@@ -830,18 +875,18 @@ int main()
     on stdcore[2]: DataOutStream( outfname, harvesterToOut,harvestToDataOut );
     on stdcore[3]: harvester(workToHarvester,harvesterToStore,harvesterToOut,distribToHarvest,harvestToDataOut);
     on stdcore[0]: worker(distToWork[0],workToHarvester[0]);
-    on stdcore[1]: worker(distToWork[1],workToHarvester[1]);
+    on stdcore[2]: worker(distToWork[1],workToHarvester[1]);
     on stdcore[2]: worker(distToWork[2],workToHarvester[2]);
     on stdcore[3]: worker(distToWork[3],workToHarvester[3]);
     on stdcore[0]: store(harvesterToStore[0],distribToStore[0]);
     on stdcore[1]: store(harvesterToStore[1],distribToStore[1]);
     on stdcore[2]: store(harvesterToStore[2],distribToStore[2]);
     on stdcore[3]: store(harvesterToStore[3],distribToStore[3]);
-    /*on stdcore[0]: visualiser(distToVisualiser,quadrant0,quadrant1,quadrant2,quadrant3,workerToVisualiser[0],workerToVisualiser[1],workerToVisualiser[2],workerToVisualiser[3]);
+    on stdcore[0]: visualiser(distToVisualiser,quadrant0,quadrant1,quadrant2,quadrant3,distToVisualiser);
     on stdcore[0]: showLED(cled0,quadrant0);
     on stdcore[1]: showLED(cled1,quadrant1);
     on stdcore[2]: showLED(cled2,quadrant2);
-    on stdcore[3]: showLED(cled3,quadrant3);*/  //Uncomment to start using the visualiser
+    on stdcore[3]: showLED(cled3,quadrant3);  //Uncomment to start using the visualiser
   }
   //printf( "Main:Done...\n" );
   return 0;

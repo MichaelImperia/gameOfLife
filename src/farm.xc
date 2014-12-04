@@ -15,7 +15,7 @@ out port cledG = PORT_CLOCKLED_SELG;
 out port cledR = PORT_CLOCKLED_SELR;
 in port  buttons = PORT_BUTTON;
 
-char infname[] = "hello.pgm";     //put your input image path here, absolute path
+char infname[] = "test.pgm";     //put your input image path here, absolute path
 char outfname[] = "testout.pgm"; //put your output image path here, absolute path
 
 int showLED(out port p, chanend fromVisualiser) {
@@ -89,6 +89,9 @@ void visualiser(chanend fromDist,
         else if (isPaused == 1){
             fromDist :> currentRound;
             decimalToBinary(array, currentRound);
+            isRed = 1;
+            cledR <: isRed;
+            cledG <: !isRed;
         }
         //terminate
         else if(isPaused == 2){
@@ -382,8 +385,7 @@ uchar areAliveAroundIndex(uchar array[], int cellIndex, int charIndex, int isCal
   uchar output = 0;
   //the index of the bit within the char
   int localIndex = cellIndex%8;
-  //the bit itself is checked
-  if (!isCalc) output += 1&(array[charIndex]>>(7-localIndex));
+
   //end of one char, need to check ms bit of next one
   if (localIndex == 7){
       output += 1&(array[charIndex]>>(8-localIndex));
@@ -397,10 +399,14 @@ uchar areAliveAroundIndex(uchar array[], int cellIndex, int charIndex, int isCal
       if (charIndex != 0) output += 1&(array[charIndex-1]);
   }
   else {
+      //possible speedup
+      if(array[charIndex] == 0) return output;
       //here we know it is safe to do this
       output += 1&(array[charIndex]>>(6-localIndex));
       output += 1&(array[charIndex]>>(8-localIndex));
   }
+  //the bit itself is checked
+  if (!isCalc) output += 1&(array[charIndex]>>(7-localIndex));
   return output;
 }
 
@@ -543,6 +549,9 @@ void distributor(chanend c_in, chanend toWork[], chanend toStore[], chanend toHa
   int oneWorkerLive;
   int totalLive = 0;
   uchar singleWorkerStatus;
+  timer t;
+  unsigned int start,end;
+  float factor = 100000000;
 
   //ARRAYS ESTABLISHED, WORKERS CAN NOW BE SENT
   //THE CALCULATION ARRAY TO COMPUTE
@@ -554,6 +563,7 @@ void distributor(chanend c_in, chanend toWork[], chanend toStore[], chanend toHa
   while(1){
     totalLive = 0;
     //printf("Current Round = %d\n", rounds);
+    t :> start;
     while(1){
       //printf("%d\n",lineNumber);
       //ESTABLISH THE ARRAYS
@@ -658,6 +668,8 @@ void distributor(chanend c_in, chanend toWork[], chanend toStore[], chanend toHa
         isTerminated = 0;
     }
     rounds++;
+    t :> end;
+    printf("time for one round: %f\n",((float) (end-start))/factor);
   }
   //terminate
   //printf("Distributer terminating\n");

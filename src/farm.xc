@@ -5,8 +5,8 @@ typedef unsigned char uchar;
 #include <timer.h>
 #include "pgmIO.h"
 //MUST BE MULTIPLE OF 8
-#define IMHT 512
-#define IMWD 512
+#define IMHT 16
+#define IMWD 16
 out port cled0 = PORT_CLOCKLED_0;
 out port cled1 = PORT_CLOCKLED_1;
 out port cled2 = PORT_CLOCKLED_2;
@@ -88,6 +88,9 @@ void visualiser(chanend fromDist,
         }
         else if (isPaused == 1){
             fromDist :> currentRound;
+            if (currentRound >= 4096) {
+                currentRound = 4095;
+            }
             decimalToBinary(array, currentRound);
             isRed = 1;
             cledR <: isRed;
@@ -331,7 +334,9 @@ void establishArrays(int numberOfCycles, chanend c_in, uchar above[], uchar calc
       fillArrayComplex(c_in, below, IMWD/8);
   }
   else {
-      uchar below[IMWD/8] = {0};
+      for (int i = 0; i<IMWD/8; i++){
+                below[i] = 0;
+            }
   }
   return;
 }
@@ -360,7 +365,9 @@ void establishArraysFromStore(int numberOfCycles, chanend c_in[], uchar above[],
       fillArray(c_in[numberOfCycles%4], below, IMWD/8);
   }
   else {
-      uchar below[IMWD/8] = {0};
+      for (int i = 0; i<IMWD/8; i++){
+          below[i] = 0;
+      }
   }
   return;
 }
@@ -549,9 +556,6 @@ void distributor(chanend c_in, chanend toWork[], chanend toStore[], chanend toHa
   int oneWorkerLive;
   int totalLive = 0;
   uchar singleWorkerStatus;
-  timer t;
-  unsigned int start,end;
-  float factor = 100000000;
 
   //ARRAYS ESTABLISHED, WORKERS CAN NOW BE SENT
   //THE CALCULATION ARRAY TO COMPUTE
@@ -563,7 +567,6 @@ void distributor(chanend c_in, chanend toWork[], chanend toStore[], chanend toHa
   while(1){
     totalLive = 0;
     //printf("Current Round = %d\n", rounds);
-    t :> start;
     while(1){
       //printf("%d\n",lineNumber);
       //ESTABLISH THE ARRAYS
@@ -668,8 +671,6 @@ void distributor(chanend c_in, chanend toWork[], chanend toStore[], chanend toHa
         isTerminated = 0;
     }
     rounds++;
-    t :> end;
-    printf("time for one round: %f\n",((float) (end-start))/factor);
   }
   //terminate
   //printf("Distributer terminating\n");

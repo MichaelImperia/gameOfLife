@@ -4,8 +4,9 @@ typedef unsigned char uchar;
 #include <stdio.h>
 #include <timer.h>
 #include "pgmIO.h"
-//MUST BE MULTIPLE OF 8
+//MUST BE MULTIPLE OF 4
 #define IMHT 16
+//MUST BE A MULTIPLE OF 8
 #define IMWD 16
 out port cled0 = PORT_CLOCKLED_0;
 out port cled1 = PORT_CLOCKLED_1;
